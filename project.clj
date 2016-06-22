@@ -12,7 +12,7 @@
                  [datspec "0.0.1-alpha1-SNAPSHOT"]
                  [com.stuartsierra/component "0.3.1"]
                  ;; Other stuff
-                 [datascript "0.13.3"]
+                 [datascript "0.15.0"]
                  [io.rkn/conformity "0.4.0"] ;; should this be here?
                  [com.taoensso/timbre "4.4.0"]
                  [prismatic/plumbing "0.5.2"]] ;; aren't using currently
