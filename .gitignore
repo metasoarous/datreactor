@@ -6,3 +6,5 @@
 .RData
 tmp
 *.iml
+pom.xml
+target
