@@ -1,8 +1,8 @@
 (defproject datreactor "0.0.1-alpha1-SNAPSHOT"
-  :description "Effortlessly compose data visualizations and controls for Datomic and DataScript data"
+  :description "Event and effect dispatch and handling (transactions/coordination) mechanisms for Cljc apps with DataScript databases"
   :url "http://github.com/metasoarous/datreactor"
   :license {:name "Eclipse Public License"
-            :url "http://www.eclipse.org/legal/epl-v10.html"}
+            :url "http://www.eclipse.org/legal/epl-v11.html"}
   :min-lein-version "2.0.0"
   :dependencies [[org.clojure/clojure "1.9.0-alpha6"]
                  [org.clojure/clojurescript "1.9.36"]
