@@ -204,7 +204,14 @@
     (log/debug "Effect handler :dat.reactor/fire-tx-report-handlers! called.")
     (doseq [[_ callback] @(:listeners (meta (:conn app)))]
       (callback tx-report))))
-  
+
+;; For registering effects which should dispatch after the
+(register-effect ::dispatch!
+  (fn [app db [_ dispatch-message]]
+    ;; Hmm... would be nice to get hese from where they happen
+    (log/debug "Calling dispatch after effect for dispatch id:" (first dispatch-message))
+    (dispatcher/dispatch! (:dispatcher app) dispatch-message)))
+
 ;(register-effect :dat/console-log
   ;(fn [app db effect]
     ;(log/info "Logging:" effect)))
