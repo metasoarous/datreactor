@@ -282,8 +282,11 @@
   (start [reactor]
     (log/info "Starting SimpleReactor Component")
     (try
-      (let [reactor (assoc reactor
-                           :conn (or conn (:conn app) (d/create-conn)))
+      (let [conn (or conn (:conn app) (d/create-conn))
+            app (or app {:conn conn :reactor reactor :dispatcher dispatcher})
+            reactor (assoc reactor
+                      :app app
+                      :conn conn)
             ;; Start transaction process, and stash kill chan
             kill-chan (go-react! reactor app)
             reactor (assoc reactor
@@ -299,6 +302,7 @@
     reactor))
 
 (defn new-simple-reactor
+  "If :app is specified, it is reacted on. If not, it is computed as a map of {:dispatcher :reactor :conn}"
   ([options]
    (map->SimpleReactor options))
   ([]
