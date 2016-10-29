@@ -187,10 +187,11 @@
     (log/debug "Handler :dat.reactor/resolve-tx-report called.")
     (:db-after tx-report)))
 
+
 (register-handler ::local-tx
-  (fn [app db [_ tx-forms]]
+  (fn [app db [_ tx-forms tx-meta]]
     (log/debug "Handler :dat.reactor/local-tx called.")
-    (let [tx-report (d/with db tx-forms)]
+    (let [tx-report (d/with db tx-forms tx-meta)]
       (with-effect
         [::execute-tx-report-handlers! tx-report]
         (resolve-to app db [[::resolve-tx-report tx-report]])))))
