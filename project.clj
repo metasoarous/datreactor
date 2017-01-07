@@ -5,17 +5,18 @@
             :url "http://www.eclipse.org/legal/epl-v11.html"}
   :min-lein-version "2.0.0"
   :dependencies [[org.clojure/clojure "1.9.0-alpha6"]
-                 [org.clojure/clojurescript "1.9.36"]
+                 [org.clojure/clojurescript "1.9.293"]
                  [org.clojure/core.match "0.3.0-alpha4"]
-                 [org.clojure/core.async "0.2.382"]
+                 [org.clojure/core.async "0.2.395"]
+                 [org.clojure/tools.logging "0.3.1"]
                  ;; Datsys things
                  [datspec "0.0.1-alpha1-SNAPSHOT"]
-                 [com.stuartsierra/component "0.3.1"]
+                 [com.stuartsierra/component "0.3.2"]
                  ;; Other stuff
-                 [datascript "0.15.0"]
+                 [datascript "0.15.5"]
                  [io.rkn/conformity "0.4.0"] ;; should this be here?
-                 [com.taoensso/timbre "4.4.0"]
-                 [prismatic/plumbing "0.5.2"]] ;; aren't using currently
+                 [com.taoensso/timbre "4.8.0"]
+                 [prismatic/plumbing "0.5.3"]] ;; aren't using currently
   ;;
   ;; ## Snipped from DataScript's
   ;; ============================
