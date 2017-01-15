@@ -6,6 +6,7 @@
   :min-lein-version "2.0.0"
   :dependencies [[org.clojure/clojure "1.9.0-alpha6"]
                  [org.clojure/clojurescript "1.9.293"]
+                 [org.clojure/tools.analyzer.jvm "0.6.10"]
                  [org.clojure/core.match "0.3.0-alpha4"]
                  [org.clojure/core.async "0.2.395"]
                  [org.clojure/tools.logging "0.3.1"]
