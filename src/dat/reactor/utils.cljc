@@ -1,6 +1,6 @@
 (ns dat.reactor.utils
   (:require #?@(:clj [[clojure.core.match :as match :refer [match]]
-                      [clojure.tools.logging :as log]]
+                      [taoensso.timbre :as log]]
                 :cljs [[cljs.core.match :refer-macros [match]]
                        [cljs.pprint]])))
 
