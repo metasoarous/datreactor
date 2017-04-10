@@ -221,12 +221,12 @@
 
 (register-effect :default
   (fn [app db event]
-    (log/error "No definition for event:" event "You should probably go add one in your events ns")
+    (log/error "No effect definition for event:" event "You should probably go add one in your events ns")
     db))
 
 (register-handler :default
   (fn [app db event]
-    (log/error "No definition for event:" event "You should probably go add one in your events ns")
+    (log/error "No handler definition for event:" event "You should probably go add one in your events ns")
     db))
 
 
