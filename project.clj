@@ -27,7 +27,7 @@
   ;; Leaving this out for now
   ;:global-vars {*warn-on-reflection* true}
   :cljsbuild {:builds [{:id "release"
-                        :source-paths ["src"]
+                        :source-paths ["src/cljs" "src/cljc"]
                         :assert false
                         :compiler {:output-to     "release-js/datreactor.bare.js"
                                    :optimizations :advanced
@@ -36,11 +36,11 @@
                                    :output-wrapper false
                                    :parallel-build true}}]}
                         ;:notify-command ["release-js/wrap_bare.sh"]
-  :profiles {:dev {:source-paths ["test" "dev" "src"]
+  :profiles {:dev {:source-paths ["test" "dev" "src/clj" "src/cljc"]
                    :plugins [[lein-cljsbuild "1.1.2"]
                              [lein-typed "0.3.5"]]
                    :cljsbuild {:builds [{:id "advanced"
-                                         :source-paths ["src" "test"]
+                                         :source-paths ["src/cljs" "src/cljc" "test"]
                                          :compiler {:output-to     "target/datreactor.js"
                                                     :optimizations :advanced
                                                     :source-map    "target/datreactor.js.map"
@@ -48,7 +48,7 @@
                                                     :recompile-dependents false
                                                     :parallel-build true}}
                                         {:id "none"
-                                         :source-paths ["src" "test"]
+                                         :source-paths ["src/cljs" "src/cljc" "test"]
                                          :compiler {:main          datreactor.test
                                                     :output-to     "target/datreactor.js"
                                                     :output-dir    "target/none"
