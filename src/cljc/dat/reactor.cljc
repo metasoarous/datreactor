@@ -291,7 +291,7 @@
             ;; Start transaction process, and stash kill chan
             kill-chan (go-react! reactor app)
             reactor (assoc reactor
-                           :kill-chan kill-chan)] 
+                           :kill-chan kill-chan)]
         reactor)
       (catch #?(:clj Exception :cljs :default) e
         (log/error "Error starting SimpleReactor:" e)
@@ -299,7 +299,7 @@
            :cljs (js/console.log (.-stack e)))
         reactor)))
   (stop [reactor]
-    (when kill-chan (go (async/>! kill-chan :kill)))
+    (when kill-chan (async/put! kill-chan :kill))
     reactor))
 
 (defn new-simple-reactor
