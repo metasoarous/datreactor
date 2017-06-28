@@ -59,22 +59,22 @@
   [event old-seg seg all-new]
   (contains? seg :txs))
 
-(defn ^:export server?
+(defn ^:export localize?
   [event old-seg seg all-new]
   ;; TODO: decide which segments get sent to server
   ;; TODO: handle all peers not just server
-  false)
+  (= (:dat.sync/event seg) :dat.sync/gdatoms))
 
 (defn ^:export legacy?
   [event old-seg seg all-new]
-  (= (:dat.sync/event seg) :dat.sync.event/legacy))
+  (= (:dat.sync/event seg) :dat.sync/legacy))
 
 
 ;; ## Onyx Reaction Job
 (def default-job
   {:workflow [[:dat.sync/event :dat.sync/legacy]
-              [:dat.sync/event :dat.sync/transactor]
-              [:dat.sync/event :dat.sync/server]]
+              [:dat.sync/event :dat.sync/localize] [:dat.sync/localize :dat.sync/transactor]
+              [:dat.sync/event :dat.sync/snap-transact] [:dat.sync/snap-transact :dat.sync/globalize] [:dat.sync/globalize :dat.sync/server]]
    :catalog [{:onyx/type :input
               :onyx/batch-size onyx-batch-size
               :onyx/name :dat.sync/event}
@@ -86,13 +86,25 @@
               :onyx/name :dat.sync/transactor}
              {:onyx/type :output
               :onyx/name :dat.sync/legacy
+              :onyx/batch-size onyx-batch-size}
+             {:onyx/type :function
+              :onyx/name :dat.sync/localize
+              :onyx/fn :dat.sync.core/gdatoms->local-txs
+              :onyx/batch-size onyx-batch-size}
+             {:onyx/type :function
+              :onyx/name :dat.sync/snap-transact
+              :onyx/fn :dat.sync.core/snap-transact
+              :onyx/batch-size onyx-batch-size}
+             {:onyx/type :function
+              :onyx/name :dat.sync/globalize
+              :onyx/fn :dat.sync.core/tx-report->gdatoms
               :onyx/batch-size onyx-batch-size}]
    :flow-conditions [{:flow/from :dat.sync/event
-                      :flow/to [:dat.sync/transactor]
+                      :flow/to [:dat.sync/snap-transact]
                       :flow/predicate ::transaction?}
                      {:flow/from :dat.sync/event
-                      :flow/to [:dat.sync/server]
-                      :flow/predicate ::server?}
+                      :flow/to [:dat.sync/localize]
+                      :flow/predicate ::localize?}
                      {:flow/from :dat.sync/event
                       :flow/to [:dat.sync/legacy]
                       :flow/predicate ::legacy?}]})
@@ -100,9 +112,15 @@
 (defn legacy-event><seg []
   (map (fn [event]
          (if (vector? event)
-           {:dat.sync/event :dat.sync.event/legacy
+           {:dat.sync/event :dat.sync/legacy
             :event event}
            event))))
+
+(defn +db-snap [conn]
+  (map
+    (fn [event]
+      (assoc event
+        :dat.sync/db-snap @conn))))
 
 (defn chan-middleware! [middleware-transducer & {:as options :keys [buff in-chan]}]
   ;; ???: needs a kill-chan option?
@@ -132,9 +150,7 @@
 
 (defn legacy-segment! [{:as app :keys [conn]} {:as seg :keys [event]}]
   (log/info "process legacy event" event)
-  (let [;;reactor {:app app :conn conn}
-        final-meta (atom nil)]
-    ;; TODO: fix fake reactor refs. conn already in app. very bad form.
+  (let [final-meta (atom nil)]
     (swap!
       conn
       (fn [current-db]
@@ -164,7 +180,11 @@
                                          :dat.sync/server (handler-chan! remote send-segment!)
                                          :dat.sync/legacy (handler-chan! app legacy-segment!)})
             event-chan (or event-chan (chan-middleware!
-                                        (legacy-event><seg)
+                                        (comp
+                                          (legacy-event><seg)
+                                          (+db-snap (:conn app))
+                                          ;; TODO: add event middleware-hook
+                                          )
                                         :in-chan (protocols/dispatcher-event-chan dispatcher)))
             onyx-env (or onyx-env (onyx-api/init default-job))
             ;; Start transaction process, and stash kill chan
