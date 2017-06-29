@@ -2,16 +2,11 @@
   #?(:cljs (:require-macros [cljs.core.async.macros :as async-macros :refer [go go-loop]]))
   (:require #?@(:clj [[clojure.core.async :as async :refer [go go-loop]]]
                 :cljs [[cljs.core.async :as async]])
-            ;#?(:clj [clojure.tools.logging :as log])
             [taoensso.timbre :as log #?@(:cljs [:include-macros true])]
             [dat.spec.protocols :as protocols]
             [onyx-local-rt.api :as onyx-api]
             [dat.reactor]
             [dat.sys.db]
-            ;[dat.reactor.utils :as utils]
-            [dat.reactor.dispatcher :as dispatcher]
-            [taoensso.timbre :as log #?@(:cljs [:include-macros true])]
-            [datascript.core :as d]
             [com.stuartsierra.component :as component]))
 
 (defn go-react! [{:keys [onyx-env event-chan react-chans kill-chan]}]
