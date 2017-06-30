@@ -40,21 +40,23 @@
 (defrecord StrictlyOrderedDispatcher [dispatch-chan]
   ;; Should make pluggable config options for the chan creation
   component/Lifecycle
-  (start [component]
+  (start [dispatcher]
     ;(utils/log "Starting StrictlyOrderedDispatcher component")
     (log/info "Starting StrictlyOrderedDispatcher")
-    (let [component (assoc component
+    (let [dispatcher (assoc dispatcher
                            :dispatch-chan (or dispatch-chan (async/chan 100)))]
-      component))
-  (stop [component]
+      dispatcher))
+  (stop [dispatcher]
     (log/info "Stopping StrictlyOrderedDispatcher")
     (when dispatch-chan (async/close! dispatch-chan))
-    (assoc component :dispatch-chan nil))
+    (assoc dispatcher :dispatch-chan nil))
   protocols/PDispatcher
-  (dispatch! [component event level]
+  (dispatch! [dispatcher event]
+    (protocols/dispatch! dispatcher event :default))
+  (dispatch! [dispatcher event level]
     (go (async/>! dispatch-chan event)))
   ;; Here, the event chan is just the dispatch chan...
-  (dispatcher-event-chan [component]
+  (dispatcher-event-chan [dispatcher]
     ;; Don't know if this will compile properly
     dispatch-chan))
 
@@ -72,9 +74,9 @@
 (defrecord ErrorPriorityDispatcher [default-chan error-chan event-chan]
   ;; Should make pluggable config options for the chan creation
   component/Lifecycle
-  (start [component]
+  (start [dispatcher]
     (log/info "Starting ErrorPriorityDispatcher")
-    (let [component (assoc component
+    (let [dispatcher (assoc dispatcher
                            :default-chan (or default-chan (async/chan 100))
                            :error-chan (or error-chan (async/chan 100))
                            ;; This should have no buffer so that it doesn't grab a dispatch event and put it in
@@ -85,18 +87,20 @@
         ;; through before the event chan is ready to take yet
         (let [[event chan] (async/alts! [error-chan default-chan])]
           (async/>! event-chan event)))
-      component))
-  (stop [component]
+      dispatcher))
+  (stop [dispatcher]
     (log/info "Stopping ErrorPriorityDispatcher")
-    component)
+    dispatcher)
   protocols/PDispatcher
-  (dispatch! [component event level]
+  (dispatch! [dispatcher event]
+    (protocols/dispatch! dispatcher event :default))
+  (dispatch! [dispatcher event level]
     (go
-      (async/>! 
+      (async/>!
         (if (= level :error) error-chan default-chan)
         event)))
   ;; Here, the event chan is just the dispatch chan...
-  (dispatcher-event-chan [component]
+  (dispatcher-event-chan [dispatcher]
     ;; Don't know if this will compile properly TODO
     event-chan))
 
