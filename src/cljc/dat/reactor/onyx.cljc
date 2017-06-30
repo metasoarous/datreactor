@@ -76,21 +76,9 @@
       (assoc event
         :dat.sync/db-snap @conn))))
 
-(defn chan-middleware!
-  ;; FIXME: async/pipeline already does this
-  [middleware-transducer & {:as options :keys [buff in-chan]}]
-  ;; ???: needs a kill-chan option?
-  (let [out-chan (async/chan (or buff 1) middleware-transducer)]
-    (when in-chan
-      (go-loop []
-        (let [event (async/<! in-chan)]
-          (log/info "process event" event)
-          (async/>! out-chan event)
-        (recur))))
-    out-chan))
-
 (defn handler-chan! [handler handler-fn & {:keys [chan]}]
   ;; ???: needs a kill-chan?
+  ;; ???: could be implemented with async/pipeline maybe
   (let [chan (or chan (async/chan))]
     (go-loop []
       (let [seg (async/<! chan)]
@@ -178,7 +166,7 @@
   [app {:as event-msg :keys [event id ?data ring-req ?reply-fn send-fn]}]
   (log/warn "Unhandled event:" id))
 
-(defn legacy-server-segment! [{:as app } seg]
+(defn legacy-server-segment! [app seg]
   (event-msg-handler app seg))
 
 
@@ -236,34 +224,29 @@
   component/Lifecycle
   (start [reactor]
     (log/info "Starting OnyxReactor Component")
-    (try
       (let [react-chans (or react-chans {:dat.reactor/transact (handler-chan! transactor transact-segment!)
                                          :dat.reactor/remote (handler-chan! remote send-segment!)
                                          :dat.reactor/dispatch (handler-chan! dispatcher dispatch-segment!)
                                          :dat.reactor/legacy (handler-chan! app (if server? legacy-server-segment! legacy-segment!))})
-            event-chan (or event-chan (chan-middleware!
-                                          (if server?
-                                            (map #(assoc % :dat.reactor/event :dat.reactor/legacy))
-                                            (comp (legacy-event><seg)
-                                                  (+db-snap (:conn app))))
-                                          ;; TODO: add event middleware-hook
-                                        :in-chan (protocols/dispatcher-event-chan dispatcher)))
+            event-chan (or event-chan (async/chan))
             onyx-env (or onyx-env (onyx-api/init default-job))
             ;; Start transaction process, and stash kill chan
             kill-chan (or kill-chan (async/chan))
             reactor (assoc reactor
-                        :kill-chan kill-chan
-                        :event-chan event-chan
-                        :react-chans react-chans
-                        :onyx-env onyx-env)]
+                      :kill-chan kill-chan
+                      :event-chan event-chan
+                      :react-chans react-chans
+                      :onyx-env onyx-env)]
+        (async/pipeline
+          1
+          event-chan
+          (if server?
+            (map #(assoc % :dat.reactor/event :dat.reactor/legacy))
+            (comp (legacy-event><seg)
+                  (+db-snap (:conn app))))
+          (protocols/dispatcher-event-chan dispatcher))
         (go-react! reactor)
-        reactor)
-      ;; ***TODO: add an onyx task for the remote or stitch it to the world
-      (catch #?(:clj Exception :cljs :default) e
-        (log/error "Error starting OnyxReactor:" e)
-        #?(:clj (.printStackTrace e)
-           :cljs (js/console.log (.-stack e)))
-        reactor)))
+        reactor))
   (stop [reactor]
     (when kill-chan (async/put! kill-chan :kill))
     (assoc reactor
