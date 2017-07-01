@@ -29,18 +29,6 @@
               #?(:clj (.printStackTrace e) :cljs (js/console.log (.-stack e)))))
           (recur))))))
 
-;; (defmulti handle-legacy-event (fn [db [event-id _]] event-id))
-
-;; (defmethod handle-legacy-event :default [db event]
-;;   (log/warn "Unhandled legacy event " event))
-
-;; (defn ^:export legacy [{:as seg :keys [event]}]
-;;   {:txs
-;;    [[:db.fn/call
-;;      (fn [db]
-;;        (handle-legacy-event db event))]]})
-
-
 ;; ## Onyx Predicates
 (def ^:export always (constantly true))
 
@@ -63,12 +51,15 @@
   [event old-seg seg all-new]
   (= (:dat.reactor/event seg) :dat.reactor/legacy))
 
-(defn legacy-event><seg []
-  (map (fn [event]
-         (if (vector? event)
-           {:dat.reactor/event :dat.reactor/legacy
-            :event event}
-           event))))
+(defn ^:export source-from-tx-report?
+[event old-seg seg all-new]
+  (= (:dat.sync/event-source seg) :dat.sync/tx-report))
+
+(defn ^:export source-from-remote?
+[event old-seg seg all-new]
+  (= (:dat.sync/event-source seg) :dat.sync/remote))
+
+
 
 (defn +db-snap [conn]
   (map
@@ -126,17 +117,6 @@
   ; Dispatch on event-id
   (fn [app {:as event-msg :keys [id]}] id))
 
-;; Wrap with middleware instead
-;(defn event-msg-handler* [app {:as event-msg :keys [id ?data event]}]
-  ;(try+
-    ;(event-msg-handler event-msg app)
-    ;(catch Object e
-      ;(log/error "failed to run message handler!")
-      ;(.printStackTrace e)
-      ;(throw+))))
-
-
-
 ;; ## Event handlers
 
 ;; don't really need this... should delete
@@ -177,7 +157,7 @@
   {:workflow [[:dat.reactor/event :dat.reactor/legacy]
               [:dat.reactor/event :dat.sync/localize] [:dat.sync/localize :dat.reactor/transact]
 ;;               [:dat.reactor/event :dat.reactor/dispatch]
-;;               [:dat.reactor/event :dat.reactor/remote]
+              [:dat.reactor/event :dat.sync/handle-legacy-tx-report] [:dat.sync/handle-legacy-tx-report :dat.reactor/remote]
               [:dat.reactor/event :dat.sync/snap-transact] [:dat.sync/snap-transact :dat.sync/globalize] [:dat.sync/globalize :dat.reactor/remote]]
    :catalog [{:onyx/type :input
               :onyx/batch-size onyx-batch-size
@@ -205,10 +185,19 @@
              {:onyx/type :function
               :onyx/name :dat.sync/globalize
               :onyx/fn :dat.sync.core/tx-report->gdatoms
-              :onyx/batch-size onyx-batch-size}]
+              :onyx/batch-size onyx-batch-size}
+             {:onyx/type :function
+              :onyx/name :dat.sync/handle-legacy-tx-report
+              :onyx/fn :dat.sync.core/handle-legacy-tx-report
+              :onyx/batch-size onyx-batch-size}
+
+             ]
    :flow-conditions [{:flow/from :dat.reactor/event
                       :flow/to [:dat.sync/snap-transact]
                       :flow/predicate ::transaction?}
+                     {:flow/from :dat.reactor/event
+                      :flow/to [:dat.sync/handle-legacy-tx-report]
+                      :flow/predicate ::source-from-tx-report?}
                      {:flow/from :dat.reactor/event
                       :flow/to [:dat.sync/localize]
                       :flow/predicate ::localize?}
@@ -228,7 +217,7 @@
                                          :dat.reactor/remote (handler-chan! remote send-segment!)
                                          :dat.reactor/dispatch (handler-chan! dispatcher dispatch-segment!)
                                          :dat.reactor/legacy (handler-chan! app (if server? legacy-server-segment! legacy-segment!))})
-            event-chan (or event-chan (async/chan))
+            event-chan (or event-chan (if server? (protocols/dispatcher-event-chan dispatcher) (async/chan)))
             onyx-env (or onyx-env (onyx-api/init default-job))
             ;; Start transaction process, and stash kill chan
             kill-chan (or kill-chan (async/chan))
@@ -237,14 +226,13 @@
                       :event-chan event-chan
                       :react-chans react-chans
                       :onyx-env onyx-env)]
-        (async/pipeline
-          1
-          event-chan
-          (if server?
-            (map #(assoc % :dat.reactor/event :dat.reactor/legacy))
-            (comp (legacy-event><seg)
-                  (+db-snap (:conn app))))
-          (protocols/dispatcher-event-chan dispatcher))
+        (when-not server?
+          (async/pipeline
+            1
+            event-chan
+            (comp (dat.sync/legacy-event><seg)
+                  (+db-snap (:conn app)))
+            (protocols/dispatcher-event-chan dispatcher)))
         (go-react! reactor)
         reactor))
   (stop [reactor]
