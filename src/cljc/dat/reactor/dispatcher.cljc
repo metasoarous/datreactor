@@ -41,20 +41,23 @@
   ;; Should make pluggable config options for the chan creation
   component/Lifecycle
   (start [dispatcher]
-    ;(utils/log "Starting StrictlyOrderedDispatcher component")
     (log/info "Starting StrictlyOrderedDispatcher")
-    (let [dispatcher (assoc dispatcher
-                           :dispatch-chan (or dispatch-chan (async/chan 100)))]
-      dispatcher))
+    (assoc dispatcher
+      :dispatch-chan (or dispatch-chan (async/chan 100))))
   (stop [dispatcher]
     (log/info "Stopping StrictlyOrderedDispatcher")
     (when dispatch-chan (async/close! dispatch-chan))
     (assoc dispatcher :dispatch-chan nil))
+  protocols/PKabel
+  (recv-chan [dispatcher]
+    dispatch-chan)
+  (send-chan [dispatcher]
+    dispatch-chan)
   protocols/PDispatcher
   (dispatch! [dispatcher event]
-    (protocols/dispatch! dispatcher event :default))
+    (async/put! dispatch-chan event))
   (dispatch! [dispatcher event level]
-    (go (async/>! dispatch-chan event)))
+    (async/put! dispatch-chan event))
   ;; Here, the event chan is just the dispatch chan...
   (dispatcher-event-chan [dispatcher]
     ;; Don't know if this will compile properly
@@ -71,41 +74,66 @@
 
 
 ;; Any events with level :error will get processed by the reactor before _any_ other dispatched events.
-(defrecord ErrorPriorityDispatcher [default-chan error-chan event-chan]
+(defrecord ErrorPriorityDispatcher [default> error> ppub send> recv>]
   ;; Should make pluggable config options for the chan creation
   component/Lifecycle
   (start [dispatcher]
-    (log/info "Starting ErrorPriorityDispatcher")
-    (let [dispatcher (assoc dispatcher
-                           :default-chan (or default-chan (async/chan 100))
-                           :error-chan (or error-chan (async/chan 100))
-                           ;; This should have no buffer so that it doesn't grab a dispatch event and put it in
-                           ;; the buffer just before an error event comes in
-                           :event-chan (async/chan))]
+         (log/info "Starting ErrorPriorityDispatcher")
+         (let [send> (or send> (async/chan 100))
+               ppub (or ppub
+                        (async/pub
+                          send>
+                          :dat.reactor/priority
+                          ;; ???: how do buffers work here
+                          {:default 99
+                           :error 1}
+                          ))
+               recv> (or recv> (async/chan))
+               default> (or default>
+                            (let [chan> (async/chan)]
+                              (async/sub ppub :default chan>)
+                              chan>))
+               error> (or error>
+                          (let [chan> (async/chan)]
+                            (async/sub ppub :error chan>)
+                            chan>))]
       (go-loop []
-        ;; Hmm... this actually doesn't have the semantics we want, since 1 default chan event could get
-        ;; through before the event chan is ready to take yet
-        (let [[event chan] (async/alts! [error-chan default-chan])]
-          (async/>! event-chan event)))
-      dispatcher))
+        ;; ???: Hmm... this actually doesn't have the semantics we want, since 1 default chan event could get through before the event chan is ready to take yet
+        (let [[event chan] (async/alts! [error> default>] :priority true)]
+          (async/>! recv> event)))
+      (assoc dispatcher
+        :send> send>
+        :recv> recv>
+        :ppub ppub
+        :default> default>
+        :error> error>)))
   (stop [dispatcher]
     (log/info "Stopping ErrorPriorityDispatcher")
-    dispatcher)
+    (assoc dispatcher
+      :send> nil
+      :recv> nil
+      :ppub nil
+      :default> nil
+      :error> nil))
+  protocols/PKabel
+  (recv-chan [dispatcher]
+    recv>)
+  (send-chan [dispatcher]
+    send>)
   protocols/PDispatcher
   (dispatch! [dispatcher event]
     (protocols/dispatch! dispatcher event :default))
-  (dispatch! [dispatcher event level]
-    (go
-      (async/>!
-        (if (= level :error) error-chan default-chan)
-        event)))
+  (dispatch!
+    ;; !!!: Should really be [dispatcher level event] for consistency. This is how log* works. This is how remotes work.
+    [dispatcher event level]
+    (async/put! send> (assoc event :dat.reactor/priority level)))
   ;; Here, the event chan is just the dispatch chan...
   (dispatcher-event-chan [dispatcher]
     ;; Don't know if this will compile properly TODO
-    event-chan))
+    recv>))
 
 (defn new-error-priority-dispatcher
-  "Creates a new ErroPriorityDispatcher. Can customize :default-chan and :error-chan through options.
+  "Creates a new ErroPriorityDispatcher. Can customize :default> and :error> through options.
   Idea is that Reactor will get error events before other queued events, but the mechanism is a little flawed.
   Currently, it's still possible for a non error event to get through before the reactor is ready to consume from the event-chan.
   May need to adjust the protocols."

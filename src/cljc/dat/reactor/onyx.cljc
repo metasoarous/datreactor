@@ -80,16 +80,6 @@
 (defn transact-segment! [transactor {:keys [txs]}]
   (protocols/transact! transactor txs))
 
-(defn send-segment! [remote {:as seg :keys [:dat.remote/peer-id]}]
-  (if peer-id
-    (protocols/send-event! remote peer-id (dissoc seg :dat.remote/peer-id))
-    (protocols/send-event! remote seg)))
-
-(defn dispatch-segment! [dispatcher {:as seg :keys [:dat.reactor/dispatch-level]}]
-  (if dispatch-level
-    (protocols/dispatch! dispatcher seg dispatch-level)
-    (protocols/dispatch! dispatcher seg)))
-
 (defn legacy-segment! [{:as app :keys [conn]} {:as seg :keys [event]}]
   (log/info "process legacy event" event)
   (let [final-meta (atom nil)]
@@ -122,7 +112,7 @@
 ;; don't really need this... should delete
 (defmethod event-msg-handler :chsk/ws-ping
   [_ _]
-;;   (log/debug "Ping")
+  (log/debug "Ping")
   )
 
 ;; Setting up our two main dat.sync hooks
@@ -137,8 +127,8 @@
 ;; We handle the bootstrap message by simply sending back the bootstrap data
 (defmethod event-msg-handler :dat.sync.client/bootstrap
   ;; What is send-fn here? Does that wrap the uid for us? (0.o)
-  [{:as app :keys [datomic remote]} {:as event-msg :keys [id uid send-fn]}]
-  (log/info "Sending bootstrap message")
+  [{:as app :keys [datomic remote]} {:as event-msg :keys [uid send-fn]}]
+  (log/info "Sending bootstrap message" uid event-msg)
   (protocols/send-event! remote uid [:dat.sync.client/bootstrap (protocols/bootstrap datomic)]))
 
 ;; Fallback handler; should send message saying I don't know what you mean
@@ -168,9 +158,9 @@
              {:onyx/type :output
               :onyx/batch-size onyx-batch-size
               :onyx/name :dat.reactor/transact}
-             {:onyx/type :output
-              :onyx/batch-size onyx-batch-size
-              :onyx/name :dat.reactor/dispatch}
+;;              {:onyx/type :output
+;;               :onyx/batch-size onyx-batch-size
+;;               :onyx/name :dat.reactor/dispatch}
              {:onyx/type :output
               :onyx/name :dat.reactor/legacy
               :onyx/batch-size onyx-batch-size}
@@ -214,10 +204,20 @@
   (start [reactor]
     (log/info "Starting OnyxReactor Component")
       (let [react-chans (or react-chans {:dat.reactor/transact (handler-chan! transactor transact-segment!)
-                                         :dat.reactor/remote (handler-chan! remote send-segment!)
-                                         :dat.reactor/dispatch (handler-chan! dispatcher dispatch-segment!)
+                                         :dat.reactor/remote (protocols/send-chan remote)
+;;                                          :dat.reactor/dispatch (protocols/send-chan dispatcher)
                                          :dat.reactor/legacy (handler-chan! app (if server? legacy-server-segment! legacy-segment!))})
-            event-chan (or event-chan (if server? (protocols/dispatcher-event-chan dispatcher) (async/chan)))
+            event-chan (or event-chan
+                           (if server?
+                             (protocols/recv-chan dispatcher)
+                             (let [chan> (async/chan)]
+                               (async/pipeline
+                                 1
+                                 chan>
+                                 (comp (dat.sync/legacy-event><seg)
+                                       (+db-snap (:conn app)))
+                                 (protocols/recv-chan dispatcher))
+                               chan>)))
             onyx-env (or onyx-env (onyx-api/init default-job))
             ;; Start transaction process, and stash kill chan
             kill-chan (or kill-chan (async/chan))
@@ -226,13 +226,6 @@
                       :event-chan event-chan
                       :react-chans react-chans
                       :onyx-env onyx-env)]
-        (when-not server?
-          (async/pipeline
-            1
-            event-chan
-            (comp (dat.sync/legacy-event><seg)
-                  (+db-snap (:conn app)))
-            (protocols/dispatcher-event-chan dispatcher)))
         (go-react! reactor)
         reactor))
   (stop [reactor]
