@@ -48,7 +48,7 @@
     (log/info "Stopping StrictlyOrderedDispatcher")
     (when dispatch-chan (async/close! dispatch-chan))
     (assoc dispatcher :dispatch-chan nil))
-  protocols/PKabel
+  protocols/Wire
   (recv-chan [dispatcher]
     dispatch-chan)
   (send-chan [dispatcher]
@@ -115,7 +115,7 @@
       :ppub nil
       :default> nil
       :error> nil))
-  protocols/PKabel
+  protocols/Wire
   (recv-chan [dispatcher]
     recv>)
   (send-chan [dispatcher]
