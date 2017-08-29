@@ -7,8 +7,6 @@
             [onyx-local-rt.api :as onyx-api]
             [datascript.core :as ds]
             [dat.reactor]
-            [dat.sync.core :as dat.sync]
-            [dat.sys.db]
             [com.stuartsierra.component :as component]))
 
 (defn conj-job
@@ -26,6 +24,15 @@
      :catalog (into catalog (:catalog more-job))
      :workflow (into workflow (:workflow more-job))
      :flow-conditions (into flow-conditions (:flow-conditions more-job)))))
+
+(defn legacy-event->seg [event]
+  (if (vector? event)
+    {:dat.reactor/event :dat.reactor/legacy
+     :event event}
+    event))
+
+(defn legacy-event><seg []
+  (map legacy-event->seg))
 
 (defn remove-outputs [env task-name]
   (assoc-in env [:tasks task-name :outputs] []))
@@ -53,35 +60,20 @@
                                 (onyx-api/new-segment (:dat.reactor/input event) event)
                                 (loopback-drain)
                                 (onyx-api/stop))]
-              (log/debug "reacting to event of type:"
-                         (:dat.reactor/event event) (:id event))
+              (log/debug "reacting to event:"
+                         [(:dat.reactor/event event)
+                          (:id event) ;; for legacy events
+                          ]
+                         "from source:"
+                         (:dat.reactor/input event))
               (doseq [{:as task :keys [dat.reactor/chan]}
                       (filter
                         #(= (:onyx/type %) :output)
                         (:catalog job))]
                 (doseq [out-seg (get-in env-after [:tasks (:onyx/name task) :outputs])]
                   ;; ???: should callbacks be allowed?
-                  (async/>! chan out-seg))))
-            (catch #?(:cljs :default :clj Exception) e
-              (log/error e "Exception in reactor go loop")
-              #?(:clj (.printStackTrace e) :cljs (js/console.log (.-stack e)))))
-          (recur))))))
-
-(defn go-react-deprecated! [{:keys [onyx-atom event-chan react-chans kill-chan]}]
-  (go-loop []
-    (let [[event port] (async/alts! [kill-chan event-chan] :priority true)]
-      (if (= port kill-chan)
-        (log/info "go-react! received kill-chan signal")
-        (do
-          (try
-            (let [env-after (-> (:env @onyx-atom)
-                                (onyx-api/new-segment :dat.reactor/event event)
-                                (loopback-drain)
-                                (onyx-api/stop))]
-              (doseq [[out-task out-chan] react-chans]
-                (doseq [out-seg (get-in env-after [:tasks out-task :outputs])]
-                  ;; ???: should callbacks be allowed?
-                  (async/>! out-chan out-seg))))
+                  (when out-seg ;; ???: quietly eat nils?
+                    (async/>! chan out-seg)))))
             (catch #?(:cljs :default :clj Exception) e
               (log/error e "Exception in reactor go loop")
               #?(:clj (.printStackTrace e) :cljs (js/console.log (.-stack e)))))
@@ -94,29 +86,6 @@
   "flow-control - "
   [event old-seg seg all-new]
   (not (nil? seg)))
-
-(defn ^:export transaction?
-  [event old-seg seg all-new]
-  (contains? seg :txs))
-
-(defn ^:export localize?
-  [event old-seg seg all-new]
-  ;; TODO: decide which segments get sent to server
-  ;; TODO: handle all peers not just server
-  (= (:dat.reactor/event seg) :dat.sync/gdatoms))
-
-(defn ^:export legacy?
-  [event old-seg seg all-new]
-  (= (:dat.reactor/event seg) :dat.reactor/legacy))
-
-(defn ^:export source-from-tx-report?
-[event old-seg seg all-new]
-  (= (:dat.sync/event-source seg) :dat.sync/tx-report))
-
-(defn ^:export source-from-remote?
-[event old-seg seg all-new]
-  (= (:dat.sync/event-source seg) :dat.sync/remote))
-
 
 
 (defn +db-snap [conn]
@@ -134,9 +103,6 @@
         (handler-fn handler seg))
         (recur))
     chan))
-
-(defn transact-segment! [transactor {:keys [txs]}]
-  (protocols/transact! transactor txs))
 
 (defn legacy-segment! [{:as app :keys [conn]} {:as seg :keys [event]}]
   (log/info "process legacy event" event)
@@ -161,42 +127,6 @@
         ;; immediately following their execution trigger
         (dat.reactor/execute-effect! app (or (:db (meta effect)) @conn) effect)))))
 
-(defmulti event-msg-handler
-  ; Dispatch on event-id
-  (fn [app {:as event-msg :keys [id]}] id))
-
-;; ## Event handlers
-
-;; don't really need this... should delete
-(defmethod event-msg-handler :chsk/ws-ping
-  [_ _]
-;;   (log/debug "Ping")
-  )
-
-;; Setting up our two main dat.sync hooks
-
-;; General purpose transaction handler
-(defmethod event-msg-handler :dat.sync.remote/tx
-  [{:as app :keys [datomic]} {:as event-msg :keys [id ?data]}]
-  (log/info "tx recieved from client: " id)
-  (let [tx-report @(dat.sync/apply-remote-tx! (:conn datomic) ?data)]
-    (println "Do something with:" tx-report)))
-
-;; We handle the bootstrap message by simply sending back the bootstrap data
-(defmethod event-msg-handler :dat.sync.client/bootstrap
-  ;; What is send-fn here? Does that wrap the uid for us? (0.o)
-  [{:as app :keys [transactor remote]} {:as event-msg :keys [uid send-fn]}]
-  (log/info "Sending bootstrap message" uid event-msg)
-  (protocols/send-event! remote uid [:dat.sync.client/bootstrap (protocols/bootstrap transactor)]))
-
-;; Fallback handler; should send message saying I don't know what you mean
-(defmethod event-msg-handler :default ; Fallback
-  [app {:as event-msg :keys [event id ?data ring-req ?reply-fn send-fn]}]
-  (log/warn "Unhandled event:" id))
-
-(defn legacy-server-segment! [app seg]
-  (event-msg-handler app seg))
-
 (defn go-new-inputs! [{:as onyx :keys [job running-chans]} event-chan]
   (log/debug "go-new-inputs")
   (let [new-input-tasks
@@ -210,7 +140,7 @@
       (log/debug "listening for inputs task" (:onyx/name task))
       (go-loop []
         (let [event (async/<! chan)]
-          (async/>! event-chan (assoc (dat.sync/legacy-event->seg event) :dat.reactor/input (:onyx/name task)))
+          (async/>! event-chan (assoc (legacy-event->seg event) :dat.reactor/input (:onyx/name task)))
           (recur))))
   (assoc onyx
     :running-chans
@@ -218,6 +148,10 @@
       (or running-chans #{})
       (map :dat.reactor/chan)
       new-input-tasks))))
+
+(defn log-segment! [log-fn seg]
+  ;; FIXME: debug not showing on client prints. using info for now
+  (log/info "logging segment..." seg))
 
 (defn expand-job!
   "Expands reactor's onyx job to include the given job fragment. The job-key is used to allow overwriting a job fragment previously registered. This function has side effects, but is semi-idempotent (you can safely call multiple times with the same fragment)."
@@ -236,103 +170,22 @@
             (merge
               {:job-fragments fragments
                :job job
-               :env (onyx-api/init job)})
+               :env (onyx-api/init job) ;; ???: init job on only when needed?
+               })
             (go-new-inputs! event-chan)
             )))))
 
-
-(def onyx-batch-size 20) ;; FIXME: move to config
-
-
-(defn wire-connection
-  "Deprecated"
-  ([wire nspace]
-   (wire-connection wire (keyword nspace "recv") (keyword nspace "send")))
-  ([wire recv-name send-name]
-   {:catalog
-    [{:onyx/type :output
-      :onyx/name send-name
-      :dat.reactor/chan (protocols/send-chan wire)
-      :onyx/batch-size onyx-batch-size}
-     {:onyx/type :input
-      :onyx/name recv-name
-      :dat.reactor/chan (protocols/recv-chan wire)
-      :onyx/batch-size onyx-batch-size}]}))
-
-;; ## Onyx Reaction Job
-(def base-job
-  {:workflow [[:dat.reactor/event :dat.reactor/legacy]
-              [:dat.reactor/event :dat.sync/localize] [:dat.sync/localize :dat.reactor/transact]
-;;               [:dat.reactor/event :dat.reactor/dispatch]
-              [:dat.reactor/event :dat.sync/handle-legacy-tx-report] [:dat.sync/handle-legacy-tx-report :dat.reactor/remote]
-              [:dat.reactor/event :dat.sync/snap-transact] [:dat.sync/snap-transact :dat.sync/globalize] [:dat.sync/globalize :dat.reactor/remote]]
-   :catalog [{:onyx/type :input
-              :onyx/batch-size onyx-batch-size
-              :onyx/name :dat.reactor/event}
-             {:onyx/type :output
-              :onyx/batch-size onyx-batch-size
-              :onyx/name :dat.reactor/remote}
-             {:onyx/type :input
-              :onyx/name :dat.reactor/loop-in
-              :onyx/batch-size onyx-batch-size}
-             {:onyx/type :output
-              :onyx/name :dat.reactor/loopback
-              :onyx/batch-size onyx-batch-size}
-             {:onyx/type :output
-              :onyx/batch-size onyx-batch-size
-              :onyx/name :dat.reactor/transact}
-;;              {:onyx/type :output
-;;               :onyx/batch-size onyx-batch-size
-;;               :onyx/name :dat.reactor/dispatch}
-             {:onyx/type :output
-              :onyx/name :dat.reactor/legacy
-              :onyx/batch-size onyx-batch-size}
-             {:onyx/type :function
-              :onyx/name :dat.sync/localize
-              :onyx/fn :dat.sync.core/gdatoms->local-txs
-              :onyx/batch-size onyx-batch-size}
-             {:onyx/type :function
-              :onyx/name :dat.sync/snap-transact
-              :onyx/fn :dat.sync.core/snap-transact
-              :onyx/batch-size onyx-batch-size}
-             {:onyx/type :function
-              :onyx/name :dat.sync/globalize
-              :onyx/fn :dat.sync.core/tx-report->gdatoms
-              :onyx/batch-size onyx-batch-size}
-             {:onyx/type :function
-              :onyx/name :dat.sync/handle-legacy-tx-report
-              :onyx/fn :dat.sync.core/handle-legacy-tx-report
-              :onyx/batch-size onyx-batch-size}
-
-             ]
-   :flow-conditions [{:flow/from :dat.reactor/event
-                      :flow/to [:dat.sync/snap-transact]
-                      :flow/predicate ::transaction?}
-                     {:flow/from :dat.reactor/event
-                      :flow/to [:dat.sync/handle-legacy-tx-report]
-                      :flow/predicate ::source-from-tx-report?}
-                     {:flow/from :dat.reactor/event
-                      :flow/to [:dat.sync/localize]
-                      :flow/predicate ::localize?}
-                     {:flow/from :dat.reactor/event
-                      :flow/to [:dat.reactor/legacy]
-                      :flow/predicate ::legacy?}
-;;                      {:flow/from :dat.reactor/authorize
-;;                       :flow/to [:dat.reactor/localize :dat.reactor/remote]
-;;                       :flow/predicate ::auth}
-                     ]})
-
-(defrecord OnyxReactor [onyx-atom event-chan kill-chan
-                        app dispatcher transactor remote server?]
+(defrecord OnyxReactor [onyx-atom event-chan kill-chan datom-api]
   component/Lifecycle
   (start [reactor]
     (log/info "Starting OnyxReactor Component")
-      (let [running? kill-chan ;; ???: move kill-chan creation back into the go-react! loop
+      (let [onyx-batch-size 20 ;; FIXME: move to config
+            running? kill-chan ;; ???: move kill-chan creation back into the go-react! loop
             reactor (assoc reactor
                       :onyx-atom (or onyx-atom (atom {}))
                       :kill-chan (or kill-chan (async/chan))
                       :event-chan (or event-chan
-                                      #?(:cljs (async/chan 1 (+db-snap (:conn app))) ;; FIXME
+                                      #?(:cljs (async/chan 1 (+db-snap (:conn datom-api))) ;; FIXME
                                          :clj  (async/chan))))]
         (expand-job!
           reactor
@@ -345,76 +198,13 @@
              :onyx/name :dat.reactor/loopback
              :onyx/batch-size onyx-batch-size}
             {:onyx/type :output
-             :onyx/name :dat.reactor/legacy
-             :dat.reactor/chan (handler-chan!
-                                 app ;; !!!: bad
-                                (if server? legacy-server-segment! legacy-segment!)) ;; ???: idempotent
-             :onyx/batch-size onyx-batch-size}
-
-            {:onyx/type :input
              :onyx/batch-size onyx-batch-size
-             :dat.reactor/chan (protocols/recv-chan dispatcher)
-             :onyx/name :dat.view.dom/event}
-;;             {:onyx/type :output
-;;              :onyx/batch-size onyx-batch-size
-;;              :dat.reactor/chan (protocols/send-chan dispatcher)
-;;              :onyx/name :dat.view.dom/render}
-            {:onyx/type :input
-             :onyx/batch-size onyx-batch-size
-             :dat.reactor/chan (protocols/recv-chan remote)
-             :onyx/name :dat.remote/recv}
-            {:onyx/type :output
-             :onyx/batch-size onyx-batch-size
-             :dat.reactor/chan (protocols/send-chan remote)
-             :onyx/name :dat.remote/send}
-            {:onyx/type :input
-             :onyx/batch-size onyx-batch-size
-             :dat.reactor/chan (protocols/recv-chan transactor)
-             :onyx/name :dat.db/tx-report}
-            {:onyx/type :output
-             :onyx/batch-size onyx-batch-size
-             :dat.reactor/chan (handler-chan! transactor transact-segment!) ;;(protocols/send-chan transactor)
-             :onyx/name :dat.db/transact}
-            {:onyx/type :function
-             :onyx/name :dat.sync/localize
-             :onyx/fn :dat.sync.core/gdatoms->local-txs
-             :onyx/batch-size onyx-batch-size}
-            {:onyx/type :function
-             :onyx/name :dat.sync/snap-transact
-             :onyx/fn :dat.sync.core/snap-transact
-             :onyx/batch-size onyx-batch-size}
-            {:onyx/type :function
-             :onyx/name :dat.sync/globalize
-             :onyx/fn :dat.sync.core/tx-report->gdatoms
-             :onyx/batch-size onyx-batch-size}
-            {:onyx/type :function
-             :onyx/name :dat.sync/handle-legacy-tx-report
-             :onyx/fn :dat.sync.core/handle-legacy-tx-report
-             :onyx/batch-size onyx-batch-size}
-             ]
-           :workflow
-           [
-            [:dat.view.dom/event :dat.reactor/legacy]
-            [:dat.remote/recv :dat.reactor/legacy]
-            [:dat.remote/recv :dat.sync/localize] [:dat.sync/localize :dat.db/transact]
-            [:dat.db/tx-report :dat.sync/handle-legacy-tx-report] [:dat.sync/handle-legacy-tx-report :dat.remote/send]
-            [:dat.view.dom/event :dat.sync/snap-transact] [:dat.sync/snap-transact :dat.sync/globalize] [:dat.sync/globalize :dat.remote/send]
-            ]
-           :flow-conditions
-           [{:flow/from :dat.view.dom/event
-             :flow/to [:dat.sync/snap-transact]
-             :flow/predicate ::transaction?}
-            {:flow/from :dat.remote/recv
-             :flow/to [:dat.sync/localize]
-             :flow/predicate ::localize?}
-            {:flow/from :dat.view.dom/event
-             :flow/to [:dat.reactor/legacy]
-             :flow/predicate ::legacy?}
-            {:flow/from :dat.remote/recv
-             :flow/to [:dat.reactor/legacy]
-             :flow/predicate ::legacy?}]
-           }
-          )
+             :dat.reactor/chan (handler-chan! ;; TODO: idempotent
+                                 nil
+                                 log-segment!)
+             :onyx/name :dat.reactor/log}]
+            ;; TODO: loopback cycle protection
+           })
         (when (not running?)
           (go-react! reactor))
         reactor))
@@ -424,44 +214,6 @@
     (assoc reactor
       :event-chan nil
       :onyx-atom nil
-      :kill-chan nil)))
-
-(defrecord OnyxReactorDeprecated [app dispatcher transactor remote onyx-atom event-chan kill-chan react-chans server?]
-  component/Lifecycle
-  (start [reactor]
-    (log/info "Starting OnyxReactor Component")
-      (let [react-chans (or react-chans {:dat.reactor/transact (handler-chan! transactor transact-segment!)
-                                         :dat.reactor/remote (protocols/send-chan remote)
-;;                                          :dat.reactor/dispatch (protocols/send-chan dispatcher)
-                                         :dat.reactor/legacy (handler-chan! app (if server? legacy-server-segment! legacy-segment!))})
-            event-chan (or event-chan
-                           (if server?
-                             (protocols/recv-chan dispatcher)
-                             (let [chan> (async/chan)]
-                               (async/pipeline
-                                 1
-                                 chan>
-                                 (comp (dat.sync/legacy-event><seg)
-                                       (+db-snap (:conn app)))
-                                 (protocols/recv-chan dispatcher))
-                               chan>)))
-            ;; Start transaction process, and stash kill chan
-            kill-chan (or kill-chan (async/chan))
-            reactor (assoc reactor
-                      :onyx-atom (or onyx-atom
-                                    (atom {:env (onyx-api/init base-job)
-                                           :job-fragments {:dat.reactor/base-job base-job}}))
-                      :kill-chan kill-chan
-                      :event-chan event-chan
-                      :react-chans react-chans)]
-        (go-react! reactor)
-        reactor))
-  (stop [reactor]
-    (when kill-chan (async/put! kill-chan :kill))
-    (assoc reactor
-      :event-chan nil
-      :onyx-atom nil
-      :react-chans nil
       :kill-chan nil)))
 
 (defn new-onyx-reactor
