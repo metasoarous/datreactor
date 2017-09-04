@@ -21,9 +21,9 @@
    ;; ???: use deep merge? or single layer deep merge?
    ;; TODO: add other onyx job keys like windowing and triggers
    (assoc job
-     :catalog (into catalog (:catalog more-job))
-     :workflow (into workflow (:workflow more-job))
-     :flow-conditions (into flow-conditions (:flow-conditions more-job)))))
+     :catalog (into (or catalog #{}) (:catalog more-job))
+     :workflow (into (or workflow #{}) (:workflow more-job))
+     :flow-conditions (into (or flow-conditions []) (:flow-conditions more-job)))))
 
 (defn legacy-event->seg [event]
   (if (vector? event)
@@ -167,11 +167,11 @@
             job (transduce (map second) conj-job fragments)]
 ;;         (log/debug "full job" job)
         (-> onyx
-            (merge
-              {:job-fragments fragments
-               :job job
-               :env (onyx-api/init job) ;; ???: init job on only when needed?
-               })
+            (assoc
+              :job-fragments fragments
+              :job job
+              :env (onyx-api/init job) ;; ???: init job on only when needed?
+              )
             (go-new-inputs! event-chan)
             )))))
 
