@@ -88,11 +88,11 @@
   (not (nil? seg)))
 
 
-(defn +db-snap [conn]
-  (map
-    (fn [event]
-      (assoc event
-        :dat.sync/db-snap @conn))))
+;; (defn +db-snap [conn]
+;;   (map
+;;     (fn [event]
+;;       (assoc event
+;;         :dat.sync/db-snap @conn))))
 
 (defn handler-chan! [handler handler-fn & {:keys [chan]}]
   ;; ???: needs a kill-chan?
@@ -175,7 +175,7 @@
             (go-new-inputs! event-chan)
             )))))
 
-(defrecord OnyxReactor [onyx-atom event-chan kill-chan datom-api]
+(defrecord OnyxReactor [onyx-atom event-chan kill-chan]
   component/Lifecycle
   (start [reactor]
     (log/info "Starting OnyxReactor Component")
@@ -184,9 +184,9 @@
             reactor (assoc reactor
                       :onyx-atom (or onyx-atom (atom {}))
                       :kill-chan (or kill-chan (async/chan))
-                      :event-chan (or event-chan
-                                      #?(:cljs (async/chan 1 (+db-snap (:conn datom-api))) ;; FIXME
-                                         :clj  (async/chan))))]
+                      :event-chan (or event-chan (async/chan))
+
+            )]
         (expand-job!
           reactor
           ::base-job
