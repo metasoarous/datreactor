@@ -60,12 +60,12 @@
                                 (onyx-api/new-segment (:dat.reactor/input event) event)
                                 (loopback-drain)
                                 (onyx-api/stop))]
-              (log/debug "reacting to event:"
-                         [(:dat.reactor/event event)
-                          (:id event) ;; for legacy events
-                          ]
-                         "from source:"
-                         (:dat.reactor/input event))
+;;               (log/debug "reacting to event:"
+;;                          [(:dat.reactor/event event)
+;;                           (:id event) ;; for legacy events
+;;                           ]
+;;                          "from source:"
+;;                          (:dat.reactor/input event))
               (doseq [{:as task :keys [dat.reactor/chan]}
                       (filter
                         #(= (:onyx/type %) :output)
