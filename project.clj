@@ -1,4 +1,4 @@
-(defproject datreactor "0.0.1-alpha1-SNAPSHOT"
+(defproject datreactor "0.0.1-alpha3-SNAPSHOT"
   :description "Event and effect dispatch and handling (transactions/coordination) mechanisms for Cljc apps with DataScript databases"
   :url "http://github.com/metasoarous/datreactor"
   :license {:name "Eclipse Public License"
