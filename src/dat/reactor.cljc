@@ -140,6 +140,9 @@
   (with-effects [effect] db))
 
 
+;; TODO Need to think about whether we really want the [::tx tx-forms tx-meta] notation, since breaks arity
+;; calls, and lots of assumptions
+
 ;; Would be nice if registering an effect also created an event handler by the same id that just triggers that
 ;; effect... (This happens now, but see caveat in definition below)
 ;; Should also have errors in effect handlers logged and handled. TODO
