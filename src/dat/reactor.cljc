@@ -34,6 +34,16 @@
   ([reactor message]
    (dispatcher/dispatch-error! (:dispatcher reactor) message)))
 
+;; this should maybe be in utils?
+(defn safe-with-meta
+  [value metadata]
+  ;; TODO; Would be nice to have this based on protocol implementation
+  (try
+    (with-meta value metadata)
+    (catch #?(:clj Exception :cljs :default) e
+      value)))
+
+
 ;; Next we're going to define the following function, which you can use in you own custom reactors to initiate
 ;; the recuction/transaction process (call in your component start implementation).
 
@@ -62,7 +72,7 @@
            (if catch?
              db'
              ;; Should we try merging in the error as metadata? Am I crazy like a fox?
-             (reduced (with-meta db' (merge (meta db') {:datview.resolver/error e})))))))
+             (reduced (safe-with-meta db' (merge (meta db') {:datview.resolver/error e})))))))
      db
      ;; So we can do (when ...) in our blocks
      (remove nil? events)))
@@ -87,7 +97,7 @@
     (let [new-db (handler-fn app db event)]
       (if (meta new-db)
         new-db
-        (with-meta new-db (meta db))))))
+        (safe-with-meta new-db (meta db))))))
 
 (defn register-handler
   "Register an event handler. Optionally specify middleware as second arg. Can be a vector of such fns, as well.
@@ -125,13 +135,13 @@
   "Registers effects on the database value. This is the mode of communication for effect message which need to get processed."
   [effects db]
   (log/debug "Adding effects for effect-ids:" (map first effects))
-  (with-meta
+  (safe-with-meta
     db
     (update (meta db)
             ::effects
             concatv
             ;; This should hopefully let us run effects on the db values from whence they triggered
-            (map (fn [effect] (with-meta effect {:db db}))
+            (map (fn [effect] (safe-with-meta effect {:db db}))
                  effects))))
 
 (defn with-effect
@@ -260,7 +270,9 @@
                   (let [new-db (handle-event! reactor current-db event)]
                     (reset! final-meta (meta new-db))
                     ;; Here we dissoc the effects, because we need to not let them stack up
-                    (with-meta new-db (dissoc (meta new-db) ::effects)))
+                    (if (meta new-db)
+                      (safe-with-meta new-db (dissoc (meta new-db) ::effects))
+                      new-db))
                   ;; We might just want to have our own error channel here, and set an option in the reactor
                   (catch #?(:clj Exception :cljs :default) e
                     (log/error e "Exception in reactor swap for event: " event)
